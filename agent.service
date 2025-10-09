@@ -1,0 +1,29 @@
+[Unit]
+Description=Telegram Agent Bot Service
+Documentation=https://github.com/your-repo/telegram-agent
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/docker-compose up -d
+ExecStop=/usr/local/bin/docker-compose down
+ExecReload=/usr/local/bin/docker-compose restart
+WorkingDirectory=/opt/telegram-agent
+Restart=always
+RestartSec=10
+User=root
+Group=root
+
+# Environment variables
+Environment=COMPOSE_PROJECT_NAME=telegram-agent
+Environment=DOCKER_BUILDKIT=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-agent
+
+[Install]
+WantedBy=multi-user.target
