@@ -16,7 +16,11 @@ class ConversationMemory:
     """Handles conversation memory storage and retrieval"""
     
     def __init__(self, db_path: str = "memory.db"):
-        self.db_path = Path(db_path)
+        # Создаем директорию для данных если её нет
+        data_dir = Path("/app/data") if Path("/app").exists() else Path("data")
+        data_dir.mkdir(exist_ok=True)
+        
+        self.db_path = data_dir / db_path
         self.max_messages = 10  # Keep last 10 messages per user
         
         # Initialize database
