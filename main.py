@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Telegram Agent Bot - Intelligent Personal Assistant
 Main application entry point with Telegram Bot implementation
@@ -100,7 +99,8 @@ class TelegramAgentBot:
         self._initialize_vector_db()
 
         # Initialize health endpoint
-        self._setup_health_endpoint()
+        self.http_server_task = None
+        self.app = None
 
         self._setup_handlers()
     
@@ -122,7 +122,14 @@ class TelegramAgentBot:
     def _setup_health_endpoint(self):
         """Setup HTTP health endpoint for Docker healthcheck"""
         if aiohttp is None:
-            logger.warning("aiohttp not available, health endpoint disabled")
+            logger.info("aiohttp not available, health endpoint disabled")
+            self.http_server_task = None
+            return
+        
+        # Проверяем, нужен ли HTTP сервер (только в Docker)
+        if not Path("/app").exists():
+            logger.info("Not in Docker environment, health endpoint disabled")
+            self.http_server_task = None
             return
         
         try:
@@ -131,11 +138,12 @@ class TelegramAgentBot:
             self.app.router.add_get('/status', self._status_endpoint)
             
             # Start HTTP server in background
-            asyncio.create_task(self._start_http_server())
+            self.http_server_task = asyncio.create_task(self._start_http_server())
             logger.info("Health endpoint initialized on port 8000")
             
         except Exception as e:
             logger.error(f"Error setting up health endpoint: {e}")
+            self.http_server_task = None
     
     async def _start_http_server(self):
         """Start HTTP server for health checks"""
@@ -553,16 +561,38 @@ class TelegramAgentBot:
                 "Произошла ошибка. Попробуйте еще раз или используйте /help."
             )
     
+    async def cleanup(self):
+        """Cleanup resources"""
+        if self.http_server_task and not self.http_server_task.done():
+            self.http_server_task.cancel()
+            try:
+                await self.http_server_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("HTTP server stopped")
+
     def run(self):
         """Run the bot"""
         logger.info("Starting Telegram Agent Bot...")
         logger.info(f"MCP Status: {self.mcp_status}")
         
-        # Start the bot
-        self.application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
+        # Setup health endpoint
+        self._setup_health_endpoint()
+        
+        try:
+            # Start the bot
+            self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+        except Exception as e:
+            logger.error(f"Bot error: {e}")
+        finally:
+            # Cleanup
+            if self.http_server_task:
+                asyncio.run(self.cleanup())
 
 def test_dialogue():
     """Test dialogue simulation to demonstrate memory and vector DB functionality"""
