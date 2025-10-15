@@ -1,42 +1,35 @@
-# Telegram Bot
+# Telegram Bot (легкий)
 python-telegram-bot==20.7
 
-# Google APIs
+# Google APIs (минимальные)
 google-api-python-client==2.108.0
 google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.1.1
 
-# Vector Database and ML
-faiss-cpu==1.7.4
-sentence-transformers==2.2.2
-numpy==1.24.3
-
-# Database
-# sqlite3 входит в стандартную библиотеку Python
-
-# OpenAI
+# OpenAI (легкий)
 openai==1.3.7
 
-# HTTP Requests
+# HTTP Requests (легкие)
 requests==2.31.0
 aiohttp==3.9.1
 
 # Environment Variables
 python-dotenv==1.0.0
 
-# Docker (for development)
-docker==6.1.3
-
-# Additional utilities
+# Дополнительные утилиты (только необходимые)
 pydantic==2.5.0
-asyncio-mqtt==0.16.1
 aiofiles==23.2.1
-schedule==1.2.0
 pytz==2023.3
 
-# Logging
-loguru==0.7.2
-
-# Testing (optional)
+# Тестирование (опционально)
 pytest==7.4.3
 pytest-asyncio==0.21.1
+
+# УДАЛЕНЫ ТЯЖЕЛЫЕ ПАКЕТЫ:
+# - faiss-cpu==1.7.4 (заменен на SQLite)
+# - sentence-transformers==2.2.2 (заменен на простой текстовый поиск)
+# - numpy==1.24.3 (не нужен для простого поиска)
+# - docker==6.1.3 (только для разработки)
+# - asyncio-mqtt==0.16.1 (не используется)
+# - schedule==1.2.0 (не используется)
+# - loguru==0.7.2 (используем встроенный logging)
