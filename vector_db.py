@@ -1,191 +1,177 @@
 #!/usr/bin/env python3
 """
-Vector Database module for Telegram Agent Bot
-Handles knowledge storage and retrieval using FAISS and sentence-transformers
+Упрощенная векторная база данных для Telegram Agent Bot
+Использует простые текстовые поиски вместо ML эмбеддингов
 """
 
 import json
 import logging
-import numpy as np
+import re
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
-import pickle
-
-try:
-    import faiss
-    from sentence_transformers import SentenceTransformer
-    import openai
-except ImportError as e:
-    logging.error(f"Required packages not installed: {e}")
-    raise
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
-class VectorKnowledgeBase:
-    """Handles vector-based knowledge storage and retrieval"""
+class SimpleKnowledgeBase:
+    """Простая база знаний на основе текстового поиска"""
     
-    def __init__(self, model_name: str = 'all-MiniLM-L6-v2', index_path: str = "faiss_index"):
-        self.model_name = model_name
-        self.index_path = Path(index_path)
+    def __init__(self, db_path: str = "knowledge.db"):
+        # Создаем директорию для данных если её нет
+        data_dir = Path("/app/data") if Path("/app").exists() else Path("data")
+        data_dir.mkdir(exist_ok=True)
+        
+        self.db_path = data_dir / db_path
         self.knowledge_path = Path("knowledge.json")
         
-        # Initialize sentence transformer model
-        try:
-            self.model = SentenceTransformer(model_name)
-            self.embedding_dim = self.model.get_sentence_embedding_dimension()
-            logger.info(f"Loaded sentence transformer model: {model_name}")
-            logger.info(f"Embedding dimension: {self.embedding_dim}")
-        except Exception as e:
-            logger.error(f"Failed to load sentence transformer model: {e}")
-            raise
+        # Инициализация SQLite базы данных
+        self._init_database()
         
-        # Initialize FAISS index
-        self.index = None
-        self.knowledge_texts = []
-        self.knowledge_metadata = []
-        
-        # Load or create index
-        self._load_or_create_index()
+        logger.info("Simple knowledge base initialized")
     
-    def _load_or_create_index(self):
-        """Load existing FAISS index or create new one"""
+    def _init_database(self):
+        """Инициализация SQLite базы данных"""
         try:
-            if self.index_path.exists():
-                # Load existing index
-                self.index = faiss.read_index(str(self.index_path))
-                
-                # Load knowledge texts and metadata
-                metadata_path = self.index_path.with_suffix('.metadata')
-                if metadata_path.exists():
-                    with open(metadata_path, 'rb') as f:
-                        data = pickle.load(f)
-                        self.knowledge_texts = data['texts']
-                        self.knowledge_metadata = data['metadata']
-                
-                logger.info(f"Loaded existing FAISS index with {self.index.ntotal} vectors")
-            else:
-                # Create new index
-                self.index = faiss.IndexFlatIP(self.embedding_dim)  # Inner product for cosine similarity
-                logger.info(f"Created new FAISS index with dimension {self.embedding_dim}")
-                
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Создание таблицы знаний
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS knowledge (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    text TEXT NOT NULL,
+                    metadata TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Создание индекса для полнотекстового поиска
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_text ON knowledge(text)
+            ''')
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Database initialized at {self.db_path}")
+            
         except Exception as e:
-            logger.error(f"Error loading/creating FAISS index: {e}")
-            # Create new index as fallback
-            self.index = faiss.IndexFlatIP(self.embedding_dim)
+            logger.error(f"Error initializing database: {e}")
+            raise
     
     def add_knowledge(self, texts: List[str], metadata: List[Dict[str, Any]] = None) -> bool:
         """
-        Add knowledge texts to the vector database
+        Добавить знания в базу данных
         
         Args:
-            texts: List of text documents to add
-            metadata: Optional metadata for each text
+            texts: Список текстовых документов
+            metadata: Опциональные метаданные для каждого текста
             
         Returns:
-            bool: True if successful, False otherwise
+            bool: True если успешно, False иначе
         """
         try:
             if not texts:
                 logger.warning("No texts provided to add_knowledge")
                 return False
             
-            # Generate embeddings
-            embeddings = self.model.encode(texts, convert_to_numpy=True)
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             
-            # Normalize embeddings for cosine similarity
-            faiss.normalize_L2(embeddings)
+            for i, text in enumerate(texts):
+                meta = metadata[i] if metadata and i < len(metadata) else {}
+                meta_json = json.dumps(meta, ensure_ascii=False)
+                
+                cursor.execute(
+                    'INSERT INTO knowledge (text, metadata) VALUES (?, ?)',
+                    (text, meta_json)
+                )
             
-            # Add to FAISS index
-            self.index.add(embeddings)
+            conn.commit()
+            conn.close()
             
-            # Store texts and metadata
-            self.knowledge_texts.extend(texts)
-            if metadata:
-                self.knowledge_metadata.extend(metadata)
-            else:
-                # Add default metadata
-                self.knowledge_metadata.extend([{}] * len(texts))
-            
-            logger.info(f"Added {len(texts)} knowledge items to vector database")
-            logger.info(f"Total items in database: {self.index.ntotal}")
-            
+            logger.info(f"Added {len(texts)} knowledge items to database")
             return True
             
         except Exception as e:
-            logger.error(f"Error adding knowledge to vector database: {e}")
+            logger.error(f"Error adding knowledge: {e}")
             return False
     
     def search(self, query: str, top_k: int = 3) -> List[Tuple[str, float, Dict[str, Any]]]:
         """
-        Search for relevant knowledge based on query
+        Поиск релевантных знаний по запросу
         
         Args:
-            query: Search query
-            top_k: Number of top results to return
+            query: Поисковый запрос
+            top_k: Количество лучших результатов
             
         Returns:
-            List of tuples: (text, score, metadata)
+            Список кортежей: (текст, оценка, метаданные)
         """
         try:
-            if self.index.ntotal == 0:
-                logger.warning("Vector database is empty")
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Простой поиск по ключевым словам
+            query_words = re.findall(r'\w+', query.lower())
+            
+            if not query_words:
+                conn.close()
                 return []
             
-            # Generate query embedding
-            query_embedding = self.model.encode([query], convert_to_numpy=True)
-            faiss.normalize_L2(query_embedding)
+            # Поиск по ключевым словам
+            search_conditions = []
+            params = []
             
-            # Search in FAISS index
-            scores, indices = self.index.search(query_embedding, min(top_k, self.index.ntotal))
+            for word in query_words:
+                search_conditions.append("LOWER(text) LIKE ?")
+                params.append(f"%{word}%")
             
-            # Prepare results
-            results = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx >= 0 and idx < len(self.knowledge_texts):  # Valid index
-                    text = self.knowledge_texts[idx]
-                    metadata = self.knowledge_metadata[idx] if idx < len(self.knowledge_metadata) else {}
-                    results.append((text, float(score), metadata))
+            sql = f'''
+                SELECT text, metadata, 
+                       ({" + ".join([f"CASE WHEN LOWER(text) LIKE ? THEN 1 ELSE 0 END" for _ in query_words])}) as score
+                FROM knowledge 
+                WHERE {" OR ".join(search_conditions)}
+                ORDER BY score DESC, LENGTH(text) ASC
+                LIMIT ?
+            '''
             
-            logger.debug(f"Search query '{query}' returned {len(results)} results")
-            return results
+            # Добавляем параметры для подсчета очков
+            params.extend([f"%{word}%" for word in query_words])
+            params.append(top_k)
+            
+            cursor.execute(sql, params)
+            results = cursor.fetchall()
+            conn.close()
+            
+            # Форматирование результатов
+            formatted_results = []
+            for text, meta_json, score in results:
+                try:
+                    metadata = json.loads(meta_json) if meta_json else {}
+                except:
+                    metadata = {}
+                
+                # Нормализация оценки (0-1)
+                normalized_score = min(score / len(query_words), 1.0)
+                formatted_results.append((text, normalized_score, metadata))
+            
+            logger.debug(f"Search query '{query}' returned {len(formatted_results)} results")
+            return formatted_results
             
         except Exception as e:
-            logger.error(f"Error searching vector database: {e}")
+            logger.error(f"Error searching knowledge: {e}")
             return []
-    
-    def save_index(self) -> bool:
-        """Save FAISS index and metadata to disk"""
-        try:
-            # Create directory if it doesn't exist
-            self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save FAISS index
-            faiss.write_index(self.index, str(self.index_path))
-            
-            # Save metadata
-            metadata_path = self.index_path.with_suffix('.metadata')
-            with open(metadata_path, 'wb') as f:
-                pickle.dump({
-                    'texts': self.knowledge_texts,
-                    'metadata': self.knowledge_metadata
-                }, f)
-            
-            logger.info(f"Saved FAISS index to {self.index_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error saving FAISS index: {e}")
-            return False
     
     def load_knowledge_from_json(self, json_path: str = None) -> bool:
         """
-        Load knowledge from JSON file
+        Загрузить знания из JSON файла
         
         Args:
-            json_path: Path to JSON file with knowledge
+            json_path: Путь к JSON файлу с знаниями
             
         Returns:
-            bool: True if successful, False otherwise
+            bool: True если успешно, False иначе
         """
         try:
             if json_path is None:
@@ -200,11 +186,11 @@ class VectorKnowledgeBase:
                 data = json.load(f)
             
             if isinstance(data, list):
-                # List of strings
+                # Список строк
                 texts = data
                 metadata = [{}] * len(texts)
             elif isinstance(data, dict) and 'knowledge' in data:
-                # Structured format
+                # Структурированный формат
                 knowledge_items = data['knowledge']
                 texts = [item.get('text', '') for item in knowledge_items]
                 metadata = [item.get('metadata', {}) for item in knowledge_items]
@@ -212,7 +198,7 @@ class VectorKnowledgeBase:
                 logger.error("Invalid JSON format for knowledge")
                 return False
             
-            # Filter out empty texts
+            # Фильтрация пустых текстов
             valid_items = [(text, meta) for text, meta in zip(texts, metadata) if text.strip()]
             if not valid_items:
                 logger.warning("No valid knowledge items found in JSON")
@@ -220,7 +206,7 @@ class VectorKnowledgeBase:
             
             texts, metadata = zip(*valid_items)
             
-            # Add to vector database
+            # Добавление в базу данных
             success = self.add_knowledge(list(texts), list(metadata))
             
             if success:
@@ -233,52 +219,74 @@ class VectorKnowledgeBase:
             return False
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get vector database statistics"""
-        return {
-            'total_items': self.index.ntotal if self.index else 0,
-            'embedding_dimension': self.embedding_dim,
-            'model_name': self.model_name,
-            'index_path': str(self.index_path),
-            'knowledge_path': str(self.knowledge_path)
-        }
+        """Получить статистику базы знаний"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) FROM knowledge')
+            total_items = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            return {
+                'total_items': total_items,
+                'model_name': 'Simple Text Search',
+                'db_path': str(self.db_path),
+                'knowledge_path': str(self.knowledge_path)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting stats: {e}")
+            return {
+                'total_items': 0,
+                'model_name': 'Simple Text Search',
+                'db_path': str(self.db_path),
+                'knowledge_path': str(self.knowledge_path)
+            }
     
     def clear(self) -> bool:
-        """Clear all knowledge from the database"""
+        """Очистить всю базу знаний"""
         try:
-            self.index = faiss.IndexFlatIP(self.embedding_dim)
-            self.knowledge_texts = []
-            self.knowledge_metadata = []
-            logger.info("Cleared vector knowledge database")
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM knowledge')
+            conn.commit()
+            conn.close()
+            
+            logger.info("Cleared knowledge database")
             return True
+            
         except Exception as e:
-            logger.error(f"Error clearing vector database: {e}")
+            logger.error(f"Error clearing database: {e}")
             return False
 
 
-# Global vector database instance
-vector_db = VectorKnowledgeBase()
+# Глобальный экземпляр базы знаний
+knowledge_db = SimpleKnowledgeBase()
 
 
 def add_knowledge(texts: List[str], metadata: List[Dict[str, Any]] = None) -> bool:
-    """Convenience function to add knowledge"""
-    return vector_db.add_knowledge(texts, metadata)
+    """Удобная функция для добавления знаний"""
+    return knowledge_db.add_knowledge(texts, metadata)
 
 
 def search_knowledge(query: str, top_k: int = 3) -> List[Tuple[str, float, Dict[str, Any]]]:
-    """Convenience function to search knowledge"""
-    return vector_db.search(query, top_k)
+    """Удобная функция для поиска знаний"""
+    return knowledge_db.search(query, top_k)
 
 
 def load_knowledge_from_json(json_path: str = None) -> bool:
-    """Convenience function to load knowledge from JSON"""
-    return vector_db.load_knowledge_from_json(json_path)
+    """Удобная функция для загрузки знаний из JSON"""
+    return knowledge_db.load_knowledge_from_json(json_path)
 
 
 def get_vector_db_stats() -> Dict[str, Any]:
-    """Convenience function to get vector database stats"""
-    return vector_db.get_stats()
+    """Удобная функция для получения статистики базы знаний"""
+    return knowledge_db.get_stats()
 
 
 def save_vector_db() -> bool:
-    """Convenience function to save vector database"""
-    return vector_db.save_index()
+    """Удобная функция для сохранения базы знаний (не нужно для SQLite)"""
+    return True
