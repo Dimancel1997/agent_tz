@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+!/usr/bin/env python3
 """
 Agent module for Telegram Agent Bot
 Handles LLM integration and response generation using OpenAI GPT-3.5-turbo
