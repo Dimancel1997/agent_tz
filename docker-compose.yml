@@ -14,9 +14,7 @@ services:
       - ./logs:/app/logs
       - ./reports:/app/reports
       - ./conversations:/app/conversations
-      - ./memory.db:/app/memory.db
-      - ./faiss_knowledge.index:/app/faiss_knowledge.index
-      - ./faiss_knowledge_metadata.json:/app/faiss_knowledge_metadata.json
+      - ./knowledge.json:/app/knowledge.json
     restart: unless-stopped
     networks:
       - agent-network
